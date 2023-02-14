@@ -9,7 +9,7 @@ class KapitalAPI:
     endpoint_cards_list = ["uzcard", "humo", "visa", "wallet"]
     endpoint_accounts_list = ["account"]
 
-    from_epoch = datetime.datetime(2022, 1, 1, 0, 0, 0).strftime("%s") + "000"
+    from_epoch = datetime.datetime(2021, 1, 1, 0, 0, 0).strftime("%s") + "000"
     to_epoch = datetime.datetime.now().strftime("%s") + "000"
 
     device_id = ""
