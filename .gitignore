@@ -3,7 +3,7 @@ __pycache__/
 venv/
 *.pickle
 *.xlsx
-
+.DS_*
 
 # C extensions
 *.so
