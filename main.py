@@ -9,5 +9,3 @@ client = kapital.KapitalAPI(
 )
 
 client.get_all_exports()
-
-
