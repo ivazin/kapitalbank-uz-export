@@ -1,12 +1,12 @@
 # Kapitalbank UZ API data exporter
 
-Простой экспорт доступных по API данных о картах, счетах и транзакциях из Капиталбанка (Узбекистан). Зачем? Увы, ни интернет-банка, ни нормального прилоедние у банка нет )
+Простой экспорт доступных по API данных о картах, счетах и транзакциях из Капиталбанка (Узбекистан). Зачем? Увы, ни интернет-банка, ни нормального приложения у банка нет )
 
 ## Установка
 
-Describe how to install and set up the project, including any installation commands, configuration steps, or dependencies that need to be installed.
-
 ```sh
+git clone https://github.com/ivazin/kapitalbank-uz-export.git
+cd kapitalbank-uz-export
 python3 -m venv venv
 source venv/bin/activate
 pip3 install -r requirements.txt 
