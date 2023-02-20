@@ -30,8 +30,10 @@ class KapitalAPI:
         "wallet",
     ]
 
-    KAPITAL_CONFIG_CACHE_FILE = "kapidata.pickle"  #
+    # файл для хранения токена, чтобы постоянно не вводить смски и не вызывать вопросов у банка
+    KAPITAL_CONFIG_CACHE_FILE = "kapidata.pickle"
 
+    # даты С и ДО какого момента запрашивать транзации
     from_epoch = datetime.datetime(2021, 1, 1, 0, 0, 0).strftime("%s") + "000"
     to_epoch = datetime.datetime.now().strftime("%s") + "000"
 
@@ -94,46 +96,57 @@ class KapitalAPI:
                 return False
 
     def device_reg(self):
-        endpoint = f"{self.BASE_URL}/device"
-        self.device_id = self._gen_device(32)
-        payload = f'{{ "deviceId" : "{self.device_id}", "name" : "{self.app_name}" }}'
-        headers = {**self.headers_main}
-        response = requests.request("POST", endpoint, headers=headers, data=payload)
-        result_json = response.json()
-        assert result_json.get("data", {}).get("message", {}) == "Success"
+        try:
+            endpoint = f"{self.BASE_URL}/device"
+            self.device_id = self._gen_device(32)
+            payload = f'{{ "deviceId" : "{self.device_id}", "name" : "{self.app_name}" }}'
+            headers = {**self.headers_main}
+            response = requests.request("POST", endpoint, headers=headers, data=payload)
+            result_json = response.json()
+            assert result_json.get("data", {}).get("message", {}) == "Success"
+        except Exception as e:
+            print("Ошибка при регистрации девайса:", e)
 
     def check_user(self):
-        endpoint = f"{self.BASE_URL}/check-client-card"
-        payload = f'{{"pan": "{self.pan}", "expiry": "{self.expiry}"}}'
-        headers = {**self.headers_main, "device-id": self.device_id}
-        response = requests.request("POST", endpoint, headers=headers, data=payload)
-        result_json = response.json()
-        self.phone = result_json.get("data", {}).get("phone", "")
-        assert self.phone != ""
+        try:
+            endpoint = f"{self.BASE_URL}/check-client-card"
+            payload = f'{{"pan": "{self.pan}", "expiry": "{self.expiry}"}}'
+            headers = {**self.headers_main, "device-id": self.device_id}
+            response = requests.request("POST", endpoint, headers=headers, data=payload)
+            result_json = response.json()
+            self.phone = result_json.get("data", {}).get("phone", "")
+            assert self.phone != ""
+        except Exception as e:
+            print("Ошибка при проверки пользовательской карты:", e)
 
     def send_sms(self):
-        endpoint = f"{self.BASE_URL_V2}/login"
-        payload = f'{{ "pan": "{self.pan}", "expiry": "{self.expiry}", "password": "{self.app_password}", "reserveSms": "false"}}'
-        headers = {**self.headers_main, "device-id": self.device_id}
-        response = requests.request("POST", endpoint, headers=headers, data=payload)
-        result_json = response.json()
-        error = result_json.get("errorMessage", "")
-        assert error == ""
+        try:
+            endpoint = f"{self.BASE_URL_V2}/login"
+            payload = f'{{ "pan": "{self.pan}", "expiry": "{self.expiry}", "password": "{self.app_password}", "reserveSms": "false"}}'
+            headers = {**self.headers_main, "device-id": self.device_id}
+            response = requests.request("POST", endpoint, headers=headers, data=payload)
+            result_json = response.json()
+            error = result_json.get("errorMessage", "")
+            assert error == ""
+        except Exception as e:
+            print("Ошибка при отправке смс:", e)
 
     def input_sms_code(self):
         self.sms_code = input("Введите код из смски: ")
-        print("Ввели:", self.sms_code)
 
     def get_token(self):
-        endpoint = f"{self.BASE_URL}/registration/verify/{self.sms_code}/{self.phone}"
-        headers = {**self.headers_main, "device-id": self.device_id}
-        response = requests.request("POST", endpoint, headers=headers, data="{}")
-        result_json = response.json()
-        error = result_json.get("errorMessage", "")
-        assert error == ""
-        self.fcm_token = result_json.get("data", {}).get("fcm_token", "")
-        self.token = result_json.get("data", {}).get("token", "")
-        assert self.token != ""
+        try:
+            endpoint = f"{self.BASE_URL}/registration/verify/{self.sms_code}/{self.phone}"
+            headers = {**self.headers_main, "device-id": self.device_id}
+            response = requests.request("POST", endpoint, headers=headers, data="{}")
+            result_json = response.json()
+            error = result_json.get("errorMessage", "")
+            assert error == ""
+            self.fcm_token = result_json.get("data", {}).get("fcm_token", "")
+            self.token = result_json.get("data", {}).get("token", "")
+            assert self.token != ""
+        except Exception as e:
+            print("Ошибка при получении токена:", e)
 
     def first_run(self):
         self.device_reg()
