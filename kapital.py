@@ -17,8 +17,6 @@ class KapitalAPI:
         app_password (str): пароль, используемый в приложении Капиталбанка
     """
 
-
-
     # список API endpoint-ов
     BASE_URL = "https://online.kapitalbank.uz/api"
     BASE_URL_V2 = f"{BASE_URL}/v2"
