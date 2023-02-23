@@ -11,6 +11,7 @@ def main():
         expiry=keys["EXPIRY"],
         app_password=keys["APP_PASSWORD"]
     )
+    from datetime import datetime
 
     client.get_all_exports()
 

@@ -340,7 +340,7 @@ class KapitalAPI:
         return df
 
     # Главный метод, который наносит основную пользу
-    def get_all_exports(self, fname="export_ALL.xlsx"):
+    def get_all_exports(self, fname=f'export_ALL_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'):
 
         df_c = self.get_cards_df()
         df_ac = self.get_accounts_df()
@@ -362,3 +362,4 @@ class KapitalAPI:
             for sht_name in writer.sheets:
                 ws = writer.sheets[sht_name]
                 ws.freeze_panes(1, 0)
+        
