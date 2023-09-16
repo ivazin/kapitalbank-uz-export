@@ -4,7 +4,6 @@ venv.*/
 *.pickle
 *.xlsx
 *.xlsx.
-*.gi*
 .DS_*
 
 # C extensions

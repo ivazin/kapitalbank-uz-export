@@ -1,6 +1,6 @@
 # подготовка
-python3 -m venv venv.gi
-source venv.gi/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 pip3 install --upgrade pip
 pip3 install -r requirements.txt 
 
@@ -9,7 +9,7 @@ python3 main.py
 
 # прибраться за собой
 deactivate
-rm -r venv.gi
+rm -r venv
 rm -r __pycache__
 
 # черновик
