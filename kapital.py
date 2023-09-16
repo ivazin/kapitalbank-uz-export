@@ -34,7 +34,7 @@ class KapitalAPI:
     KAPITAL_CONFIG_CACHE_FILE = "kapidata.pickle"
 
     # даты С и ДО какого момента запрашивать транзации
-    from_epoch = datetime.datetime(2021, 1, 1, 0, 0, 0).strftime("%s") + "000"
+    from_epoch = datetime.datetime(2022, 1, 1, 0, 0, 0).strftime("%s") + "000"
     to_epoch = datetime.datetime.now().strftime("%s") + "000"
 
     device_id = ""
@@ -50,6 +50,7 @@ class KapitalAPI:
 
     cards_ids = []  # здесь будет список пар: (id, тип_карты)
     accounts_ids = []  # здесь будет список id аккаунтов
+    transactions_data = pd.DataFrame()
 
     def __init__(self, pan, expiry, app_password):
         if len(expiry) != 4 or not expiry.isdigit():
@@ -94,6 +95,23 @@ class KapitalAPI:
                 return True
             else:
                 return False
+
+    def _splits(self, from_epoch, to_epoch, segment_length=datetime.timedelta(days=21)):
+
+        from_date = datetime.datetime.fromtimestamp(float(from_epoch)/1000.0)
+        to_date = datetime.datetime.fromtimestamp(float(to_epoch)/1000.0)
+
+        segment_start = from_date
+        segment_end = from_date + segment_length
+
+        while segment_end <= to_date:
+            yield(int(segment_start.timestamp()*1000), int(segment_end.timestamp()*1000))
+
+            segment_start = segment_end
+            segment_end = segment_end + segment_length
+
+        if segment_start < to_date:
+            yield(int(segment_start.timestamp()*1000), int(to_date.timestamp()*1000))
 
     def device_reg(self):
         try:
@@ -362,4 +380,66 @@ class KapitalAPI:
             for sht_name in writer.sheets:
                 ws = writer.sheets[sht_name]
                 ws.freeze_panes(1, 0)
-        
+
+
+    def _download_all_cards_history_df(self):
+        df = pd.DataFrame()
+        if len(self.cards_ids) == 0:
+            self.get_cards_df()
+        for id, card in self.cards_ids:
+            print(f"Получаем данные {card} - {id}")
+            for a, b in self._splits(self.from_epoch, self.to_epoch, datetime.timedelta(days=30)):
+
+                endpoint = f"{self.BASE_URL}/{card}/history?cardId={id}&dateFrom={a}&dateTo={b}"
+
+                headers = {
+                    **self.headers_main,
+                    "device-id": self.device_id,
+                    "token": self.token,
+                }
+                response = requests.request("GET", endpoint, headers=headers, data={})
+
+                new_df = pd.DataFrame()
+                if isinstance(response.json().get("data"), dict):
+                    d = response.json().get("data", {}).get("data", [])
+                    if len(d) != 0 and isinstance(d, list):
+                        new_df = pd.json_normalize(d)
+                else:
+                    d = response.json().get("data", [])
+                    if len(d) != 0 and isinstance(d, list):
+                        new_df = pd.json_normalize(d)
+
+                if not new_df.empty:
+                    new_df["card_id"] = id
+                    new_df["card_type"] = card
+                    df = pd.concat([df, new_df], axis=0)
+
+                print(f"{datetime.datetime.fromtimestamp(float(a)/1000.0)}"
+                      f" - {datetime.datetime.fromtimestamp(float(b)/1000.0)}"
+                      f" - результат: {df.shape}")
+
+        df["transDate_datetime"] = pd.to_datetime(df["transDate"], unit="ms")
+        df["utime_datetime"] = pd.to_datetime(df["utime"], unit="ms")
+        df["udate_datetime"] = pd.to_datetime(df["udate"], unit="ms")
+
+        self.transactions_data = df
+        return df
+
+    def _prepare_all_cards_history_df(self):
+        for col in ['amount', 'transAmount', 'conversionRate', 'reqamt']:
+            self.transactions_data[col] = self.transactions_data[col].str.replace(',', '.').str.replace('\xa0', '', regex=False).astype(float)
+        return self.transactions_data
+
+    def get_all_cards_history_df(self):
+        self._download_all_cards_history_df()
+        self._prepare_all_cards_history_df()
+
+        return self.transactions_data
+
+    def save_all_cards_history_df(self, fname=f'export_SUPERALL_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'):
+        with pd.ExcelWriter(fname, engine="xlsxwriter") as writer:
+            self.transactions_data.to_excel(writer, sheet_name="cards", index=False)
+
+            for sht_name in writer.sheets:
+                ws = writer.sheets[sht_name]
+                ws.freeze_panes(1, 0)

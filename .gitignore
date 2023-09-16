@@ -1,8 +1,9 @@
 __pycache__/
 .env
-venv/
+venv.*/
 *.pickle
 *.xlsx
+*.xlsx.
 .DS_*
 
 # C extensions
