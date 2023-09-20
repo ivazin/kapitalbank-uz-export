@@ -13,7 +13,7 @@ cd kapitalbank-uz-export
 ## Запуск через docker
 ```
 docker build -t my-python-app .
-docker run -it --rm -v ./:/app my-python-app
+docker run -it --rm -v ./data/:/app/data --env-file .env my-python-app 
 ```
 
 ## Запуск локально

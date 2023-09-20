@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import os
 import pickle
 import random
 import string
@@ -26,6 +27,8 @@ class KapitalAPI:
     # файл для хранения токена, чтобы постоянно не вводить смски и не вызывать вопросов у банка
     KAPITAL_CONFIG_CACHE_FILE = "kapidata.pickle"
 
+    data_path = ''
+
     # даты С и ДО какого момента запрашивать транзации
     from_epoch = datetime.datetime(2023, 1, 1, 0, 0, 0).strftime("%s") + "000"
     to_epoch = datetime.datetime.now().strftime("%s") + "000"
@@ -42,7 +45,7 @@ class KapitalAPI:
         "app-version": app_version,
     }
 
-    def __init__(self, pan, expiry, app_password, from_epoch = None, to_epoch = None):
+    def __init__(self, pan, expiry, app_password, from_epoch = None, to_epoch = None, data_path=None):
         if len(expiry) != 4 or not expiry.isdigit():
             raise ValueError("Expiry must be 4 numbers (characters): 0124 (MMYY)")
         if not pan.isdigit():
@@ -50,12 +53,14 @@ class KapitalAPI:
         self.pan = pan
         self.expiry = expiry
         self.app_password = app_password
-        if not self._load():
-            self.first_run()
+        if data_path:
+            self.data_path = data_path
         if from_epoch:
             self.from_epoch = from_epoch
         if to_epoch:
             self.to_epoch = to_epoch
+        if not self._load():
+            self.first_run()
 
     def _gen_device(self, length=32, chars=None):
         if not chars:
@@ -63,7 +68,7 @@ class KapitalAPI:
         return "".join(random.choice(chars) for _ in range(length))
 
     def _save(self):
-        with open(self.KAPITAL_CONFIG_CACHE_FILE, "wb") as handle:
+        with open(os.path.join(self.data_path, self.KAPITAL_CONFIG_CACHE_FILE), "wb") as handle:
             pickle.dump(
                 {
                     "device_id": self.device_id,
@@ -76,10 +81,10 @@ class KapitalAPI:
 
     def _load(self):
         try:
-            with open(self.KAPITAL_CONFIG_CACHE_FILE, "rb") as handle:
+            with open(os.path.join(self.data_path, self.KAPITAL_CONFIG_CACHE_FILE), "rb") as handle:
                 data_loaded = pickle.load(handle)
         except Exception as e:
-            print("Ошибка при обновлении токена:", e)
+            print("Ошибка при чтении токена:", e)
             return False
         else:
             self.token = data_loaded.get("token")
@@ -333,7 +338,8 @@ class KapitalAPI:
             self.deposit_tx_df = await self.get_deposits_transactions(session, from_date=from_date, to_date=to_date)
 
     def export_to_excel(self, fname = 'excel.xlsx'):
-        with pd.ExcelWriter(fname, engine="xlsxwriter") as writer:
+
+        with pd.ExcelWriter(os.path.join(self.data_path, fname), engine="xlsxwriter") as writer:
 
             self.visa_df.to_excel(writer, sheet_name="visa", index=False)
             self.visa_tx_df.to_excel(writer, sheet_name="visa_tx", index=False)
