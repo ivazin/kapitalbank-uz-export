@@ -1,28 +1,22 @@
+import asyncio
+import datetime
 import dotenv
-
 import kapital
 
 
-def main():
+async def main():
     keys = dotenv.dotenv_values(".env")
 
     client = kapital.KapitalAPI(
         pan=keys["PAN"],
         expiry=keys["EXPIRY"],
-        app_password=keys["APP_PASSWORD"]
+        app_password=keys["APP_PASSWORD"],
+        from_epoch=int(datetime.datetime.strptime("2023-01-01", "%Y-%m-%d").timestamp() * 1000),
+        to_epoch=int(datetime.datetime.strptime("2023-10-01", "%Y-%m-%d").timestamp() * 1000)
     )
 
-    df_c = client.get_cards_df()
-    df_ac = client.get_accounts_df()
-    # t1 = client.get_uzcard_history_df()
-    # t2 = client.get_visa_history_df()
-    # t3 = client.get_wallet_history_df()
-    # t4 = client.get_humo_history_df()
-    t2 = client.get_all_cards_history_df()
-
-    client.save_all_cards_history_df()
-    
-
+    await client.get_products_data()
+    client.export_to_excel('excel.xlsx')
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())

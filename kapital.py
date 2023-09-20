@@ -1,8 +1,10 @@
+import asyncio
 import datetime
 import pickle
 import random
 import string
 
+import aiohttp
 import pandas as pd
 import requests
 
@@ -21,21 +23,13 @@ class KapitalAPI:
     BASE_URL = "https://online.kapitalbank.uz/api"
     BASE_URL_V2 = f"{BASE_URL}/v2"
 
-    # списки endpoint-ов по счетам и картам
-    ENDPOINT_ACCOUNTS_LIST = ["account"]
-    ENDPOINT_CARDS_LIST = [
-        "uzcard",
-        "humo",
-        "visa",
-        "wallet",
-    ]
-
     # файл для хранения токена, чтобы постоянно не вводить смски и не вызывать вопросов у банка
     KAPITAL_CONFIG_CACHE_FILE = "kapidata.pickle"
 
     # даты С и ДО какого момента запрашивать транзации
-    from_epoch = datetime.datetime(2022, 1, 1, 0, 0, 0).strftime("%s") + "000"
+    from_epoch = datetime.datetime(2023, 1, 1, 0, 0, 0).strftime("%s") + "000"
     to_epoch = datetime.datetime.now().strftime("%s") + "000"
+    days_chunk=30
 
     device_id = ""
     token = ""
@@ -48,11 +42,7 @@ class KapitalAPI:
         "app-version": app_version,
     }
 
-    cards_ids = []  # здесь будет список пар: (id, тип_карты)
-    accounts_ids = []  # здесь будет список id аккаунтов
-    transactions_data = pd.DataFrame()
-
-    def __init__(self, pan, expiry, app_password):
+    def __init__(self, pan, expiry, app_password, from_epoch = None, to_epoch = None):
         if len(expiry) != 4 or not expiry.isdigit():
             raise ValueError("Expiry must be 4 numbers (characters): 0124 (MMYY)")
         if not pan.isdigit():
@@ -62,6 +52,10 @@ class KapitalAPI:
         self.app_password = app_password
         if not self._load():
             self.first_run()
+        if from_epoch:
+            self.from_epoch = from_epoch
+        if to_epoch:
+            self.to_epoch = to_epoch
 
     def _gen_device(self, length=32, chars=None):
         if not chars:
@@ -180,266 +174,186 @@ class KapitalAPI:
         except Exception as e:
             print("Ошибка при обновлении токена:", e)
 
-    def get_cards_df(self):
-        df = pd.DataFrame()
-        self.cards_ids = []
+    async def fetch_data(self, session, endpoint, params=None):
         headers = {
             **self.headers_main,
             "device-id": self.device_id,
             "token": self.token,
         }
-        for c in self.ENDPOINT_CARDS_LIST:
-            response = requests.request(
-                "GET", f"{self.BASE_URL}/{c}", headers=headers, data={}
-            )
-            if response.json().get("errorMessage", "") == "Invalid Token":
-                self.updateToken()
-                headers["token"] = self.token
-                response = requests.request(
-                    "GET", f"{self.BASE_URL}/{c}", headers=headers, data={}
-                )
+        async with session.get(f"{self.BASE_URL}/{endpoint}", headers=headers, data={}, params=params) as response:
+            print(f"Gettind data from {self.BASE_URL}/{endpoint}", params)
+            if response.status == 200:
+                data = await response.json()
+                return data
+            else:
+                return None
 
-            new_df = pd.json_normalize(response.json().get("data", {}))
-            if not new_df.empty:
-                new_df["card"] = c
-                df = pd.concat([df, new_df])
-                self.cards_ids.extend([(id, c) for id in new_df["id"].tolist()])
-
-        return df
-
-    def get_accounts_df(self):
+    async def get_visa_cards_transactions(self, session, from_date=None, to_date=None):
+        tasks = []
+        for r in self.response_visa.get("data", {}):
+            for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
+                tasks.append(self.fetch_data(session, 'visa/history', params={'cardId': r['id'], 'dateFrom': a, 'dateTo': b}))
+        responses = await asyncio.gather(*tasks)
         df = pd.DataFrame()
-        headers = {
-            **self.headers_main,
-            "device-id": self.device_id,
-            "token": self.token,
-        }
-        for c in self.ENDPOINT_ACCOUNTS_LIST:
-            response = requests.request(
-                "GET", f"{self.BASE_URL}/{c}", headers=headers, data={}
-            )
-            if response.json().get("errorMessage", "") == "Invalid Token":
-                self.updateToken()
-                headers["token"] = self.token
-                response = requests.request(
-                    "GET", f"{self.BASE_URL}/{c}", headers=headers, data={}
-                )
-
-            new_df = pd.json_normalize(response.json().get("data", {}))
-            if not new_df.empty:
-                df = pd.concat([df, new_df])
-        self.accounts_ids = df["id"].tolist()
-        return df
-
-    def get_uzcard_history_df(self):
-        df = pd.DataFrame()
-        if len(self.cards_ids) == 0:
-            self.get_cards_df()
-        for id, card in self.cards_ids:
-            if card == "uzcard":
-                endpoint = f"{self.BASE_URL}/{card}/history?cardId={id}&dateFrom={self.from_epoch}&dateTo={self.to_epoch}"
-
-                headers = {
-                    **self.headers_main,
-                    "device-id": self.device_id,
-                    "token": self.token,
-                }
-                response = requests.request("GET", endpoint, headers=headers, data={})
-
-                d = response.json().get("data", [])
-                if len(d) != 0 and isinstance(d, dict):
-                    new_df = pd.json_normalize(
-                        response.json().get("data", {}).get("data", {})
-                    )
-                    if not new_df.empty:
-                        new_df["card_id"] = id
-                        df = pd.concat([df, new_df])
-
-        df["utime_datetime"] = pd.to_datetime(df["utime"], unit="ms")
-        df["udate_datetime"] = pd.to_datetime(df["udate"], unit="ms")
-
-        return df
-
-    def get_visa_history_df(self):
-        df = pd.DataFrame()
-        if len(self.cards_ids) == 0:
-            self.get_cards_df()
-        for id, card in self.cards_ids:
-            if card == "visa":
-                endpoint = f"{self.BASE_URL}/{card}/history?cardId={id}&dateFrom={self.from_epoch}&dateTo={self.to_epoch}"
-
-                headers = {
-                    **self.headers_main,
-                    "device-id": self.device_id,
-                    "token": self.token,
-                }
-                response = requests.request("GET", endpoint, headers=headers, data={})
-                d = response.json().get("data", [])
-                if len(d) != 0 and isinstance(d, list):
-                    new_df = pd.json_normalize(response.json().get("data", {}))
-                    if not new_df.empty:
-                        new_df["card_id"] = id
-                        df = pd.concat([df, new_df])
+        for response in responses:
+            data = response.get('data', [])
+            if data:
+                new_df = pd.json_normalize(data)
+                df = pd.concat([df, new_df], ignore_index=True)
         if not df.empty:
+            df = df.sort_values(by='transDate', ascending=False)
             df["transDate_datetime"] = pd.to_datetime(df["transDate"], unit="ms")
-
         return df
 
-    def get_humo_history_df(self):
+    async def get_uzcard_cards_transactions(self, session, from_date=None, to_date=None):
+        tasks = []
+        for r in self.response_uzcard.get("data", {}):
+            for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
+                tasks.append(self.fetch_data(session, 'uzcard/history', params={'cardId': r['id'], 'dateFrom': a, 'dateTo': b}))
+        responses = await asyncio.gather(*tasks)
         df = pd.DataFrame()
-        if len(self.cards_ids) == 0:
-            self.get_cards_df()
-        for id, card in self.cards_ids:
-            if card == "humo":
-                endpoint = f"{self.BASE_URL}/{card}/history?cardId={id}&dateFrom={self.from_epoch}&dateTo={self.to_epoch}"
-
-                headers = {
-                    **self.headers_main,
-                    "device-id": self.device_id,
-                    "token": self.token,
-                }
-                response = requests.request("GET", endpoint, headers=headers, data={})
-
-                d = response.json().get("data", [])
-
-                if len(d) != 0 and isinstance(d, list):
-                    new_df = pd.json_normalize(response.json().get("data", {}))
-                    if not new_df.empty:
-                        new_df["card_id"] = id
-                        df = pd.concat([df, new_df])
-
+        for response in responses:
+            data = response.get('data', {})
+            if data:
+                new_df = pd.json_normalize(data.get('data',[]))
+                df = pd.concat([df, new_df], ignore_index=True)
+        if not df.empty:
+            df = df.sort_values(by='utime', ascending=False)
+            df["utime_datetime"] = pd.to_datetime(df["utime"], unit="ms")
+            df["udate_datetime"] = pd.to_datetime(df["udate"], unit="ms")
         return df
 
-    def get_wallet_history_df(self):
+    async def get_humo_cards_transactions(self, session, from_date=None, to_date=None):
+        tasks = []
+        for r in self.response_humo.get("data", {}):
+            for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
+                tasks.append(self.fetch_data(session, 'humo/history', params={'cardId': r['id'], 'dateFrom': a, 'dateTo': b}))
+        responses = await asyncio.gather(*tasks)
         df = pd.DataFrame()
-        if len(self.cards_ids) == 0:
-            self.get_cards_df()
-        for id, card in self.cards_ids:
-            if card == "wallet":
-                endpoint = f"{self.BASE_URL}/{card}/history?id={id}&startDate={self.from_epoch}&endDate={self.to_epoch}"
-
-                headers = {
-                    **self.headers_main,
-                    "device-id": self.device_id,
-                    "token": self.token,
-                }
-                response = requests.request("GET", endpoint, headers=headers, data={})
-
-                d = response.json().get("data", [])
-
-                if len(d) != 0 and isinstance(d, list):
-                    new_df = pd.json_normalize(response.json().get("data", {}))
-                    if not new_df.empty:
-                        new_df["card_id"] = id
-                        df = pd.concat([df, new_df])
-
+        for response in responses:
+            data = response.get('data', {})
+            if data:
+                new_df = pd.json_normalize(data)
+                df = pd.concat([df, new_df], ignore_index=True)
         return df
 
-    def get_accounts_history_df(self):
+    async def get_wallets_transactions(self, session, from_date=None, to_date=None):
+        tasks = []
+        for r in self.response_wallet.get("data", {}):
+            for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
+                tasks.append(self.fetch_data(session, 'wallet/history', params={'id': r['id'], 'startDate': a, 'endDate': b}))
+        responses = await asyncio.gather(*tasks)
         df = pd.DataFrame()
-        if len(self.accounts_ids) == 0:
-            self.get_accounts_df()
-        for id in self.accounts_ids:
-            endpoint = f"{self.BASE_URL}/account/statement?id={id}&startDate={self.from_epoch}&endDate={self.to_epoch}"
-            headers = {
-                **self.headers_main,
-                "device-id": self.device_id,
-                "token": self.token,
-            }
-            response = requests.request("GET", endpoint, headers=headers, data={})
-            d = response.json().get("data", [])
-            if len(d) != 0 and isinstance(d, list):
-                new_df = pd.json_normalize(
-                    response.json().get("data", {}).get("data", {})
-                )
-                if not new_df.empty:
-                    new_df["card_id"] = id
-                    df = pd.concat([df, new_df])
+        for response in responses:
+            data = response.get('data', {})
+            if data:
+                new_df = pd.json_normalize(data)
+                df = pd.concat([df, new_df], ignore_index=True)
+        if not df.empty:
+            df = df.sort_values(by='date', ascending=False)
+            df["date_datetime"] = pd.to_datetime(df["date"], unit="ms")
+            df["amount"] = df["amount"] / 100
         return df
 
-    # Главный метод, который наносит основную пользу
-    def get_all_exports(self, fname=f'export_ALL_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'):
 
-        df_c = self.get_cards_df()
-        df_ac = self.get_accounts_df()
-        t1 = self.get_uzcard_history_df()
-        t2 = self.get_visa_history_df()
-        t3 = self.get_wallet_history_df()
-        t4 = self.get_humo_history_df()
-        t5 = self.get_accounts_history_df()
+    async def get_accounts_transactions(self, session, from_date=None, to_date=None):
+        tasks = []
+        for r in self.response_account.get("data", {}):
+            for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
+                tasks.append(self.fetch_data(session, 'account/statement', params={'id': r['id'], 'startDate': a, 'endDate': b}))
+        responses = await asyncio.gather(*tasks)
+        df = pd.DataFrame()
+        for response in responses:
+            data = response.get('data', {})
+            if data:
+                new_df = pd.json_normalize(data)
+                df = pd.concat([df, new_df], ignore_index=True)
+        if not df.empty:
+            df = df.sort_values(by='date', ascending=False)
+            df["date_datetime"] = pd.to_datetime(df["date"], unit="ms")
+            df["dateTransact_datetime"] = pd.to_datetime(df["dateTransact"], unit="ms")
+            df["amount"] = df["amount"] / 100
+        return df
 
+    async def get_deposits_transactions(self, session, from_date=None, to_date=None):
+        tasks = []
+        for r in self.response_deposit.get("data", {}):
+            for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
+                tasks.append(self.fetch_data(session, 'deposit/statement', params={'absId': r['absId'], 'startDate': a, 'endDate': b}))
+        responses = await asyncio.gather(*tasks)
+        df = pd.DataFrame()
+        for response in responses:
+            data = response.get('data', {})
+            if data:
+                new_df = pd.json_normalize(data)
+                df = pd.concat([df, new_df], ignore_index=True)
+        # df = df.sort_values(by='docId', ascending=False)
+        if not df.empty:
+            df = df.sort_values(by='valueDate', ascending=False)
+            df["bookingDate_datetime"] = pd.to_datetime(df["bookingDate"], unit="ms")
+            df["docDate_datetime"] = pd.to_datetime(df["docDate"], unit="ms")
+            df["valueDate_datetime"] = pd.to_datetime(df["valueDate"], unit="ms")
+            df["amount"] = df["amount"] / 100
+        return df
+       
+    async def get_products_data(self, from_date=from_epoch, to_date=to_epoch):
+        self.cards = {}
+        tasks = []
+        async with aiohttp.ClientSession() as session:
+            tasks = [
+                self.fetch_data(session, 'account'),
+                self.fetch_data(session, 'deposit'),
+                self.fetch_data(session, 'uzcard'),
+                self.fetch_data(session, 'humo'),
+                self.fetch_data(session, 'visa'),
+                self.fetch_data(session, 'wallet'),
+            ]
+
+            responses = await asyncio.gather(*tasks)
+
+            self.response_account, \
+            self.response_deposit, \
+            self.response_uzcard, \
+            self.response_humo, \
+            self.response_visa, \
+            self.response_wallet = responses
+
+            self.account_df = pd.json_normalize(self.response_account.get("data", {}))
+            self.deposit_df = pd.json_normalize(self.response_deposit.get("data", {}))
+            self.uzcard_df = pd.json_normalize(self.response_uzcard.get("data", {}))
+            self.humo_df = pd.json_normalize(self.response_humo.get("data", {}))
+            self.visa_df = pd.json_normalize(self.response_visa.get("data", {}))
+            self.wallet_df = pd.json_normalize(self.response_wallet.get("data", {}))
+
+            self.visa_tx_df = await self.get_visa_cards_transactions(session, from_date=from_date, to_date=to_date)
+            self.uzcard_tx_df = await self.get_uzcard_cards_transactions(session, from_date=from_date, to_date=to_date)
+            self.humo_tx_df = await self.get_humo_cards_transactions(session, from_date=from_date, to_date=to_date)
+            self.wallet_tx_df = await self.get_wallets_transactions(session, from_date=from_date, to_date=to_date)
+            self.account_tx_df = await self.get_accounts_transactions(session, from_date=from_date, to_date=to_date)
+            self.deposit_tx_df = await self.get_deposits_transactions(session, from_date=from_date, to_date=to_date)
+
+    def export_to_excel(self, fname = 'excel.xlsx'):
         with pd.ExcelWriter(fname, engine="xlsxwriter") as writer:
-            df_c.to_excel(writer, sheet_name="cards", index=False)
-            df_ac.to_excel(writer, sheet_name="accounts", index=False)
-            t1.to_excel(writer, sheet_name="card-uzcard transactions", index=False)
-            t2.to_excel(writer, sheet_name="card-visa transactions", index=False)
-            t3.to_excel(writer, sheet_name="card-wallet transactions", index=False)
-            t4.to_excel(writer, sheet_name="card-humo transactions", index=False)
-            t5.to_excel(writer, sheet_name="accounts transactions", index=False)
 
+            self.visa_df.to_excel(writer, sheet_name="visa", index=False)
+            self.visa_tx_df.to_excel(writer, sheet_name="visa_tx", index=False)
+
+            self.uzcard_df.to_excel(writer, sheet_name="uzcard", index=False)
+            self.uzcard_tx_df.to_excel(writer, sheet_name="uzcard_tx", index=False)
+
+            self.humo_df.to_excel(writer, sheet_name="humo", index=False)
+            self.humo_tx_df.to_excel(writer, sheet_name="humo_tx", index=False)
+
+            self.wallet_df.to_excel(writer, sheet_name="wallet", index=False)
+            self.wallet_tx_df.to_excel(writer, sheet_name="wallets_tx", index=False)
+
+            self.account_df.to_excel(writer, sheet_name="account", index=False)
+            self.account_tx_df.to_excel(writer, sheet_name="accounts_tx", index=False)
+
+            self.deposit_df.to_excel(writer, sheet_name="deposit", index=False)
+            self.deposit_tx_df.to_excel(writer, sheet_name="deposits_tx", index=False)
             for sht_name in writer.sheets:
                 ws = writer.sheets[sht_name]
                 ws.freeze_panes(1, 0)
 
-
-    def _download_all_cards_history_df(self):
-        df = pd.DataFrame()
-        if len(self.cards_ids) == 0:
-            self.get_cards_df()
-        for id, card in self.cards_ids:
-            print(f"Получаем данные {card} - {id}")
-            for a, b in self._splits(self.from_epoch, self.to_epoch, datetime.timedelta(days=30)):
-
-                endpoint = f"{self.BASE_URL}/{card}/history?cardId={id}&dateFrom={a}&dateTo={b}"
-
-                headers = {
-                    **self.headers_main,
-                    "device-id": self.device_id,
-                    "token": self.token,
-                }
-                response = requests.request("GET", endpoint, headers=headers, data={})
-
-                new_df = pd.DataFrame()
-                if isinstance(response.json().get("data"), dict):
-                    d = response.json().get("data", {}).get("data", [])
-                    if len(d) != 0 and isinstance(d, list):
-                        new_df = pd.json_normalize(d)
-                else:
-                    d = response.json().get("data", [])
-                    if len(d) != 0 and isinstance(d, list):
-                        new_df = pd.json_normalize(d)
-
-                if not new_df.empty:
-                    new_df["card_id"] = id
-                    new_df["card_type"] = card
-                    df = pd.concat([df, new_df], axis=0)
-
-                print(f"{datetime.datetime.fromtimestamp(float(a)/1000.0)}"
-                      f" - {datetime.datetime.fromtimestamp(float(b)/1000.0)}"
-                      f" - результат: {df.shape}")
-
-        df["transDate_datetime"] = pd.to_datetime(df["transDate"], unit="ms")
-        df["utime_datetime"] = pd.to_datetime(df["utime"], unit="ms")
-        df["udate_datetime"] = pd.to_datetime(df["udate"], unit="ms")
-
-        self.transactions_data = df
-        return df
-
-    def _prepare_all_cards_history_df(self):
-        for col in ['amount', 'transAmount', 'conversionRate', 'reqamt']:
-            self.transactions_data[col] = self.transactions_data[col].str.replace(',', '.').str.replace('\xa0', '', regex=False).astype(float)
-        return self.transactions_data
-
-    def get_all_cards_history_df(self):
-        self._download_all_cards_history_df()
-        self._prepare_all_cards_history_df()
-
-        return self.transactions_data
-
-    def save_all_cards_history_df(self, fname=f'export_SUPERALL_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'):
-        with pd.ExcelWriter(fname, engine="xlsxwriter") as writer:
-            self.transactions_data.to_excel(writer, sheet_name="cards", index=False)
-
-            for sht_name in writer.sheets:
-                ws = writer.sheets[sht_name]
-                ws.freeze_panes(1, 0)
+        print("EXPORTED:", fname)
