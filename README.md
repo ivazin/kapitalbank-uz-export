@@ -18,8 +18,8 @@ docker run -it --rm -v ./data/:/app/data --env-file .env my-python-app
 
 ## Запуск локально
 ```
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv venv.gi.nosync
+source venv.gi.nosync/bin/activate
 pip3 install -r requirements.txt 
 ```
 

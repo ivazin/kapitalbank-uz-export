@@ -179,48 +179,67 @@ class KapitalAPI:
         except Exception as e:
             print("Ошибка при обновлении токена:", e)
 
-    async def fetch_data(self, session, endpoint, params=None):
+    async def fetch_data(self, session, endpoint, params=None, max_retries=3, method='GET', retry_interval=3):
+        
         headers = {
             **self.headers_main,
             "device-id": self.device_id,
             "token": self.token,
         }
-        async with session.get(f"{self.BASE_URL}/{endpoint}", headers=headers, data={}, params=params) as response:
-            print(f"Gettind data from {self.BASE_URL}/{endpoint}", params)
-            if response.status == 200:
-                data = await response.json()
-                return data
-            else:
-                return None
+
+        data = {'endpoint': endpoint, 'params': params, 'result': None}
+
+        for attempt in range(max_retries + 1):
+            try:
+                async with session.request(method, f"{self.BASE_URL}/{endpoint}", data={}, headers=headers, params=params) as response:
+                    response_json = await response.json()
+                    data['result'] = response_json
+                    if response_json.get('errorMessage', None):
+                        raise Exception(response_json)
+                    return data
+                
+            # except (aiohttp.ClientError, aiohttp.ClientTimeout) as e:
+            except Exception as e:
+                print(f"Request failed, retrying in {retry_interval} seconds...")
+                await asyncio.sleep(retry_interval)
+                retry_interval *= 2  # Increase interval exponentially for each retry
+
+            if attempt == max_retries:
+                raise Exception('Last (max) attempt was unsuccessful')
+
+    
 
     async def get_visa_cards_transactions(self, session, from_date=None, to_date=None):
         tasks = []
-        for r in self.response_visa.get("data", {}):
+        for r in self.response_visa.get('result', {}).get("data", {}):
             for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
                 tasks.append(self.fetch_data(session, 'visa/history', params={'cardId': r['id'], 'dateFrom': a, 'dateTo': b}))
         responses = await asyncio.gather(*tasks)
         df = pd.DataFrame()
         for response in responses:
-            data = response.get('data', [])
+            data = response.get('result', {}).get('data', [])
             if data:
                 new_df = pd.json_normalize(data)
+                new_df.insert(0, 'card_id', response.get('params', {}).get('cardId', None))
                 df = pd.concat([df, new_df], ignore_index=True)
         if not df.empty:
             df = df.sort_values(by='transDate', ascending=False)
             df["transDate_datetime"] = pd.to_datetime(df["transDate"], unit="ms")
         return df
 
+
     async def get_uzcard_cards_transactions(self, session, from_date=None, to_date=None):
         tasks = []
-        for r in self.response_uzcard.get("data", {}):
+        for r in self.response_uzcard.get('result', {}).get("data", {}):
             for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
                 tasks.append(self.fetch_data(session, 'uzcard/history', params={'cardId': r['id'], 'dateFrom': a, 'dateTo': b}))
         responses = await asyncio.gather(*tasks)
         df = pd.DataFrame()
         for response in responses:
-            data = response.get('data', {})
+            data = response.get('result', {}).get('data', {})
             if data:
                 new_df = pd.json_normalize(data.get('data',[]))
+                new_df.insert(0, 'card_id', response.get('params', {}).get('cardId', None))
                 df = pd.concat([df, new_df], ignore_index=True)
         if not df.empty:
             df = df.sort_values(by='utime', ascending=False)
@@ -228,31 +247,36 @@ class KapitalAPI:
             df["udate_datetime"] = pd.to_datetime(df["udate"], unit="ms")
         return df
 
+
     async def get_humo_cards_transactions(self, session, from_date=None, to_date=None):
         tasks = []
-        for r in self.response_humo.get("data", {}):
+        for r in self.response_humo.get('result', {}).get("data", {}):
             for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
                 tasks.append(self.fetch_data(session, 'humo/history', params={'cardId': r['id'], 'dateFrom': a, 'dateTo': b}))
         responses = await asyncio.gather(*tasks)
         df = pd.DataFrame()
         for response in responses:
-            data = response.get('data', {})
+            # data = response.get('data', {})
+            data = response.get('result', {}).get('data', {})
             if data:
                 new_df = pd.json_normalize(data)
+                new_df.insert(0, 'card_id', response.get('params', {}).get('cardId', None))
                 df = pd.concat([df, new_df], ignore_index=True)
         return df
 
+
     async def get_wallets_transactions(self, session, from_date=None, to_date=None):
         tasks = []
-        for r in self.response_wallet.get("data", {}):
+        for r in self.response_wallet.get('result', {}).get("data", {}):
             for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
                 tasks.append(self.fetch_data(session, 'wallet/history', params={'id': r['id'], 'startDate': a, 'endDate': b}))
         responses = await asyncio.gather(*tasks)
         df = pd.DataFrame()
         for response in responses:
-            data = response.get('data', {})
+            data = response.get('result', {}).get('data', {})
             if data:
                 new_df = pd.json_normalize(data)
+                new_df.insert(0, 'w_id', response.get('params', {}).get('id', None))
                 df = pd.concat([df, new_df], ignore_index=True)
         if not df.empty:
             df = df.sort_values(by='date', ascending=False)
@@ -263,15 +287,16 @@ class KapitalAPI:
 
     async def get_accounts_transactions(self, session, from_date=None, to_date=None):
         tasks = []
-        for r in self.response_account.get("data", {}):
+        for r in self.response_account.get('result', {}).get("data", {}):
             for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
                 tasks.append(self.fetch_data(session, 'account/statement', params={'id': r['id'], 'startDate': a, 'endDate': b}))
         responses = await asyncio.gather(*tasks)
         df = pd.DataFrame()
         for response in responses:
-            data = response.get('data', {})
+            data = response.get('result', {}).get('data', {})
             if data:
                 new_df = pd.json_normalize(data)
+                new_df.insert(0, 'acc_id', response.get('params', {}).get('id', None))
                 df = pd.concat([df, new_df], ignore_index=True)
         if not df.empty:
             df = df.sort_values(by='date', ascending=False)
@@ -282,15 +307,16 @@ class KapitalAPI:
 
     async def get_deposits_transactions(self, session, from_date=None, to_date=None):
         tasks = []
-        for r in self.response_deposit.get("data", {}):
+        for r in self.response_deposit.get('result', {}).get("data", {}):
             for a, b in self._splits(from_date, to_date, datetime.timedelta(days=self.days_chunk)):
                 tasks.append(self.fetch_data(session, 'deposit/statement', params={'absId': r['absId'], 'startDate': a, 'endDate': b}))
         responses = await asyncio.gather(*tasks)
         df = pd.DataFrame()
         for response in responses:
-            data = response.get('data', {})
+            data = response.get('result', {}).get('data', {})
             if data:
                 new_df = pd.json_normalize(data)
+                new_df.insert(0, 'deposit_id', response.get('params', {}).get('absId', None))
                 df = pd.concat([df, new_df], ignore_index=True)
         # df = df.sort_values(by='docId', ascending=False)
         if not df.empty:
@@ -300,7 +326,8 @@ class KapitalAPI:
             df["valueDate_datetime"] = pd.to_datetime(df["valueDate"], unit="ms")
             df["amount"] = df["amount"] / 100
         return df
-       
+
+
     async def get_products_data(self, from_date=from_epoch, to_date=to_epoch):
         self.cards = {}
         tasks = []
@@ -313,7 +340,8 @@ class KapitalAPI:
                 self.fetch_data(session, 'visa'),
                 self.fetch_data(session, 'wallet'),
             ]
-
+            
+            print('Получаем данные аккаунтов')
             responses = await asyncio.gather(*tasks)
 
             self.response_account, \
@@ -323,13 +351,14 @@ class KapitalAPI:
             self.response_visa, \
             self.response_wallet = responses
 
-            self.account_df = pd.json_normalize(self.response_account.get("data", {}))
-            self.deposit_df = pd.json_normalize(self.response_deposit.get("data", {}))
-            self.uzcard_df = pd.json_normalize(self.response_uzcard.get("data", {}))
-            self.humo_df = pd.json_normalize(self.response_humo.get("data", {}))
-            self.visa_df = pd.json_normalize(self.response_visa.get("data", {}))
-            self.wallet_df = pd.json_normalize(self.response_wallet.get("data", {}))
+            self.account_df = pd.json_normalize(self.response_account.get('result', {}).get("data", {}))
+            self.deposit_df = pd.json_normalize(self.response_deposit.get('result', {}).get("data", {}))
+            self.uzcard_df = pd.json_normalize(self.response_uzcard.get('result', {}).get("data", {}))
+            self.humo_df = pd.json_normalize(self.response_humo.get('result', {}).get("data", {}))
+            self.visa_df = pd.json_normalize(self.response_visa.get('result', {}).get("data", {}))
+            self.wallet_df = pd.json_normalize(self.response_wallet.get('result', {}).get("data", {}))
 
+            print('Получаем данные транзакций')
             self.visa_tx_df = await self.get_visa_cards_transactions(session, from_date=from_date, to_date=to_date)
             self.uzcard_tx_df = await self.get_uzcard_cards_transactions(session, from_date=from_date, to_date=to_date)
             self.humo_tx_df = await self.get_humo_cards_transactions(session, from_date=from_date, to_date=to_date)

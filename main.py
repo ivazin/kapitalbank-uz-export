@@ -17,7 +17,7 @@ async def main():
         expiry=keys["EXPIRY"],
         app_password=keys["APP_PASSWORD"],
         from_epoch=int(datetime.datetime.strptime("2023-01-01", "%Y-%m-%d").timestamp() * 1000),
-        to_epoch=int(datetime.datetime.strptime("2023-10-01", "%Y-%m-%d").timestamp() * 1000),
+        to_epoch=int(datetime.datetime.strptime("2024-01-01", "%Y-%m-%d").timestamp() * 1000),
         data_path=keys["DATA_DIR"]
     )
 
